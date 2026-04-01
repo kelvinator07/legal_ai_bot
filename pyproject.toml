@@ -5,7 +5,18 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "dotenv>=0.9.9",
     "gradio>=6.10.0",
+    "langchain-chroma>=1.1.0",
+    "langchain-community>=0.4.1",
+    "langchain-huggingface>=1.2.1",
+    "langchain-openai>=1.1.12",
+    "langchain-text-splitters>=1.1.1",
+    "numpy>=2.4.4",
     "openai>=2.30.0",
     "openai-agents>=0.13.3",
+    "plotly>=6.6.0",
+    "scikit-learn>=1.8.0",
+    "sentence-transformers>=3.0.0",
+    "tiktoken>=0.12.0",
 ]
