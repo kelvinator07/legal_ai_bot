@@ -120,23 +120,17 @@ conversation_chain = ConversationalRetrievalChain.from_llm(
 )
 
 
-SYSTEM_PROMPT_TEMPLATE = """
-You are a Nigerian legal information assistant. You help users understand their legal rights 
-under Nigerian law by citing specific statutes, sections, and case precedents.
+# This is succinct because Agent-facing prompt for the second-pass LLM after retrieval.
+SYSTEM_PROMPT_TEMPLATE = """Summarize the following retrieved excerpts for another model that will answer the user.
 
-RULES:
-1. ONLY cite laws, sections, and cases that appear in the provided context below.
-2. Structure your response as: (a) applicable law, (b) relevant sections with quotes, 
-   (c) practical next steps the user can take. (d) Expected outcome (e) Timeline
-3. If the context does not contain relevant law for the question, say: 
-   "The documents I have access to do not cover this area of law."
-4. Always end with: "Disclaimer: This is legal information, not legal advice. 
-   Please consult a qualified Nigerian lawyer for advice specific to your situation."
-Keep it short, concise, and straight to the point.
+- Use ONLY the Context. Do not cite statutes, sections, or holdings that are not in the Context.
+- If the Context is empty or irrelevant to the question, reply exactly with:
+  "The documents I have access to do not cover this area of law."
+- Be concise: relevant themes or acts, short quotes or tight paraphrases tied to the Context, then bullet next steps only if the text supports them. Omit outcome/timeline unless explicitly in the Context.
+- Do not add a legal-disclaimer; the outer assistant handles user-facing tone and disclaimers.
 
 Context:
-{context}
-"""
+{context}"""
 
 
 def expand_query(question: str) -> str:
@@ -196,8 +190,8 @@ def rag_query_answer(
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(context=context)
     if draft:
         system_prompt += (
-            "\n\nFirst-pass retrieval answer (polish and follow the rules above; "
-            "do not add facts beyond the context):\n\n"
+            "\n\nFirst-pass retrieval draft (polish using the same constraints; "
+            "do not add facts beyond the Context):\n\n"
             f"{draft}"
         )
     response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=question)])

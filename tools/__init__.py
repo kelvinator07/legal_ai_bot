@@ -1,26 +1,19 @@
 """
 Legal AI Bot - Tool Use Module
 ==============================
-This module contains all the tools the legal chatbot agent can invoke.
-Each tool is defined as a plain function with type hints and a docstring,
-making it compatible with the OpenAI Agents SDK `function_tool` decorator.
+Pure-Python tool implementations used by the MCP server (`tools.mcp_server`) and
+direct imports. The production agent loads these via **MCP stdio** (see `legal_agents`).
 
-Tools available:
-    - search_legal_database   : Look up statutes and legal provisions
-    - analyze_contract         : Extract and flag risky clauses from contract text
-    - find_similar_cases       : Find relevant past court cases
-    - generate_complaint       : Generate a complaint letter / court filing template
-    - detect_jurisdiction      : Detect country and legal jurisdiction from user context
+Tools (also exposed as MCP tools):
+    - search_legal_database
+    - analyze_contract
+    - find_similar_cases
+    - generate_complaint
+    - detect_jurisdiction
+    - search_legal_cases_online (web; see `web_cases_search`)
 
-Usage with OpenAI Agents SDK:
-    from agents import Agent, function_tool
-    from tools import ALL_TOOLS
-
-    agent = Agent(
-        name="Legal Advisor",
-        instructions="You are an African legal aid assistant...",
-        tools=ALL_TOOLS,
-    )
+Run MCP server locally:
+    uv run python -m tools.mcp_server
 """
 
 from tools.legal_search import search_legal_database
