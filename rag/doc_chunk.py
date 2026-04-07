@@ -1,126 +1,107 @@
+import logging
 import os
-import glob
-import tiktoken
+import warnings
+
+warnings.filterwarnings("ignore", message=".*position_ids.*")
+warnings.filterwarnings("ignore", message=".*migration guide.*")
+
+# Suppress the harmless "UNEXPECTED position_ids" load report from transformers
+logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
+
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.document_loaders import DirectoryLoader, TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_classic.chains import ConversationalRetrievalChain
 from langchain_classic.memory import ConversationBufferMemory
-
+from langchain_community.document_loaders import DirectoryLoader, TextLoader
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_openai import ChatOpenAI
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 load_dotenv(override=True)
+
+logger = logging.getLogger(__name__)
 
 _RAG_DIR = os.path.dirname(os.path.abspath(__file__))
 KNOWLEDGE_BASE_DIR = os.path.join(_RAG_DIR, "knowledge-base")
 VECTOR_DB_DIR = os.path.join(_RAG_DIR, "chat_vector_db")
 
-MODEL = "gpt-4o-mini"
-openai_api_key = os.getenv('OPENROUTER_API_KEY')
+def model_name() -> str:
+    return os.getenv("LEGAL_AGENT_MODEL", "gpt-4.1-mini")
 
-if openai_api_key:
-    print(f"OpenAI API Key exists and begins {openai_api_key[:8]}")
+MODEL = model_name()
+
+_embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+
+def _db_exists() -> bool:
+    """Check whether a persisted Chroma collection already has documents."""
+    if not os.path.isdir(VECTOR_DB_DIR):
+        return False
+    try:
+        store = Chroma(persist_directory=VECTOR_DB_DIR, embedding_function=_embeddings)
+        return store._collection.count() > 0
+    except Exception:
+        return False
+
+
+if _db_exists():
+    logger.info("[RAG] Existing vector store found at %s — reusing it", VECTOR_DB_DIR)
+    _vectorstore = Chroma(persist_directory=VECTOR_DB_DIR, embedding_function=_embeddings)
+    logger.info("[RAG] Loaded vectorstore with %d documents", _vectorstore._collection.count())
 else:
-    print("OpenAI API Key not set")
+    logger.info("[RAG] No existing vector store found — building from knowledge base at %s", KNOWLEDGE_BASE_DIR)
+    _loader = DirectoryLoader(
+        KNOWLEDGE_BASE_DIR,
+        glob="*.md",
+        loader_cls=TextLoader,
+        loader_kwargs={"encoding": "utf-8"},
+    )
+    _documents = _loader.load()
+    logger.info("[RAG] Loaded %d documents", len(_documents))
 
-# How many characters in all the documents?
-knowledge_base_path = os.path.join(KNOWLEDGE_BASE_DIR, "*")
-files = glob.glob(knowledge_base_path, recursive=True)
-print(f"Found {len(files)} files in the knowledge base")
+    _text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1500,
+        chunk_overlap=300,
+        separators=[
+            "\n## ",   # Major headings (Parts/Chapters)
+            "\n### ",  # Sub-headings (Sections)
+            "\n\n",
+            "\n",
+            ". ",
+            " ",
+        ]
+    )
+    _chunks = _text_splitter.split_documents(_documents)
+    logger.info("[RAG] Split into %d chunks (chunk_size=%d, overlap=%d)", len(_chunks), 1500, 300)
 
-entire_knowledge_base = ""
+    _vectorstore = Chroma.from_documents(
+        documents=_chunks, embedding=_embeddings, persist_directory=VECTOR_DB_DIR
+    )
+    logger.info("[RAG] Vectorstore created with %d documents", _vectorstore._collection.count())
+    del _loader, _documents, _text_splitter, _chunks
 
-for file_path in files:
-    with open(file_path, 'r', encoding='utf-8') as f:
-        entire_knowledge_base += f.read()
-        entire_knowledge_base += "\n\n"
+_llm = ChatOpenAI(temperature=0.7, model_name=MODEL, api_key=os.getenv("OPENAI_API_KEY"))
 
-print(f"Total characters in knowledge base: {len(entire_knowledge_base):,}")
-
-
-# How many tokens in all the documents?
-encoding = tiktoken.encoding_for_model(MODEL)
-tokens = encoding.encode(entire_knowledge_base)
-token_count = len(tokens)
-print(f"Total tokens for {MODEL}: {token_count:,}")
-
-
-# Load in everything in the knowledgebase using LangChain's loaders
-documents = []
-loader = DirectoryLoader(
-    KNOWLEDGE_BASE_DIR,
-    glob="*.md",
-    loader_cls=TextLoader,
-    loader_kwargs={"encoding": "utf-8"},
-)
-folder_docs = loader.load()
-for doc in folder_docs:
-    documents.append(doc)    
-
-print(f"Loaded {len(documents)} documents")
-
-
-# Divide into chunks using the RecursiveCharacterTextSplitter
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1500,          # Larger chunks preserve more section context
-    chunk_overlap=300,         # More overlap to avoid splitting mid-provision
-    separators=[
-        "\n## ",              # Major headings (Parts/Chapters)
-        "\n### ",             # Sub-headings (Sections)
-        "\n\n",               # Paragraph breaks
-        "\n",                 # Line breaks
-        ". ",                 # Sentences
-        " ",                  # Words
-    ]
-)
-chunks = text_splitter.split_documents(documents)
-
-print(f"Documents divided into {len(chunks)} chunks")
-
-
-# Pick an embedding model
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-# create a vector store
-if os.path.exists(VECTOR_DB_DIR):
-    print("Deleting old vector store...")
-    Chroma(persist_directory=VECTOR_DB_DIR, embedding_function=embeddings).delete_collection()
-
-vectorstore = Chroma.from_documents(
-    documents=chunks, embedding=embeddings, persist_directory=VECTOR_DB_DIR
-)
-collection = vectorstore._collection
-count = collection.count()
-print(f"Vectorstore created with {count} documents")
-
-# investigate the vectors
-sample_embedding = collection.get(limit=1, include=["embeddings"])["embeddings"][0]
-dimensions = len(sample_embedding)
-print(f"There are {count:,} vectors with {dimensions:,} dimensions in the vector store")
-
-llm = ChatOpenAI(temperature=0.7, model_name=MODEL, base_url="https://openrouter.ai/api/v1", api_key=openai_api_key)
-
-memory = ConversationBufferMemory(
+_memory = ConversationBufferMemory(
     memory_key='chat_history',
     return_messages=True,
     output_key='answer'
 )
 
 # Chroma scores are not normalized to [0, 1]; similarity_score_threshold mis-filters.
-retriever = vectorstore.as_retriever(search_kwargs={"k": 8})
+_retriever = _vectorstore.as_retriever(search_kwargs={"k": 8})
 
-conversation_chain = ConversationalRetrievalChain.from_llm(
-    llm=llm,
-    retriever=retriever,
-    memory=memory,
+_conversation_chain = ConversationalRetrievalChain.from_llm(
+    llm=_llm,
+    retriever=_retriever,
+    memory=_memory,
     return_source_documents=True,
     verbose=False
 )
 
+logger.info("[RAG] ConversationalRetrievalChain initialized")
 
-# This is succinct because Agent-facing prompt for the second-pass LLM after retrieval.
 SYSTEM_PROMPT_TEMPLATE = """Summarize the following retrieved excerpts for another model that will answer the user.
 
 - Use ONLY the Context. Do not cite statutes, sections, or holdings that are not in the Context.
@@ -133,11 +114,9 @@ Context:
 {context}"""
 
 
-# --- RAG path guard rails (bounds + safe fallbacks; doc_chunk only) ---
-MAX_RAG_QUESTION_CHARS = 32_000
-MAX_EXPAND_QUERY_INPUT_CHARS = 8_000
-MAX_EXPANDED_QUERY_CHARS = 1_200
-MAX_RAG_FINAL_ANSWER_CHARS = 24_000
+# --- RAG path guard rails ---
+MAX_RAG_QUESTION_CHARS = 1_000
+MAX_RAG_FINAL_ANSWER_CHARS = 1_000
 
 _EMPTY_QUESTION_REPLY = (
     "Please ask a specific question about Nigerian law so I can search the knowledge base."
@@ -156,46 +135,10 @@ def _sanitize_rag_text(raw: str) -> str:
     return raw.replace("\x00", "").strip()
 
 
-def expand_query(question: str) -> str:
-    """Use LLM to add legal terms to the query for better retrieval."""
-    q = _sanitize_rag_text(question)
-    if not q:
-        return ""
-    if len(q) > MAX_EXPAND_QUERY_INPUT_CHARS:
-        q = q[:MAX_EXPAND_QUERY_INPUT_CHARS]
-
-    expansion_prompt = f"""Given this user question about Nigerian law, 
-    rewrite it to include relevant legal terminology that would help 
-    find matching statutes. Keep it concise. Output only the rewritten query, no labels or explanation.
-    
-    Question: {q}
-    Rewritten query:"""
-    try:
-        response = llm.invoke([HumanMessage(content=expansion_prompt)])
-        expanded = response.content
-    except Exception:
-        return q
-
-    if expanded is None:
-        return q
-    if not isinstance(expanded, str):
-        expanded = str(expanded)
-    expanded = _sanitize_rag_text(expanded)
-    if not expanded:
-        return q
-    if len(expanded) > MAX_EXPANDED_QUERY_CHARS:
-        expanded = expanded[:MAX_EXPANDED_QUERY_CHARS].rstrip()
-    return expanded or q
-
-
-llm_question = expand_query("I bought a phone in Nigeria that broke after 1 week. Shop won't refund. What are my rights?")
-llm_question
-
-
 def _gradio_messages_to_lc_history(
     messages: list[dict | BaseMessage] | None,
 ) -> list[tuple[str, str]]:
-    """Gradio 6+ uses {'role','content'}; ConversationalRetrievalChain expects (user, assistant) tuples per turn."""
+    """Convert Gradio 6+ {'role','content'} dicts to (user, assistant) tuples for ConversationalRetrievalChain."""
     if not messages:
         return []
     turns: list[tuple[str, str]] = []
@@ -228,16 +171,21 @@ def rag_query_answer(
     q = _sanitize_rag_text(question)
     if not q:
         return _EMPTY_QUESTION_REPLY
+    logger.info("[GUARDRAILS] Sanitizing RAG input (length=%d)", len(q))
     if len(q) > MAX_RAG_QUESTION_CHARS:
         q = q[:MAX_RAG_QUESTION_CHARS]
+        logger.info("[GUARDRAILS] Input capped at %d chars", MAX_RAG_QUESTION_CHARS)
 
     lc_history = _gradio_messages_to_lc_history(chat_history)
     try:
-        out = conversation_chain.invoke({"question": q, "chat_history": lc_history})
+        logger.info("[RAG] Invoking conversation chain")
+        out = _conversation_chain.invoke({"question": q, "chat_history": lc_history})
     except Exception:
+        logger.exception("[RAG] Conversation chain failed")
         return _RAG_PROCESSING_ERROR_REPLY
 
     source_docs = out.get("source_documents") or []
+    logger.info("[RAG] Retrieved %d source documents", len(source_docs))
     context_parts: list[str] = []
     for d in source_docs:
         page = getattr(d, "page_content", None)
@@ -256,10 +204,12 @@ def rag_query_answer(
             f"{draft}"
         )
     try:
-        response = llm.invoke(
+        logger.info("[RAG] Running second-pass LLM summarization")
+        response = _llm.invoke(
             [SystemMessage(content=system_prompt), HumanMessage(content=q)]
         )
     except Exception:
+        logger.exception("[RAG] Second-pass summarization failed")
         return draft if draft else _RAG_PROCESSING_ERROR_REPLY
 
     final = response.content
@@ -272,4 +222,5 @@ def rag_query_answer(
         return draft if draft else _NO_RETRIEVAL_CONTEXT_REPLY
     if len(final) > MAX_RAG_FINAL_ANSWER_CHARS:
         final = final[: MAX_RAG_FINAL_ANSWER_CHARS - 1].rstrip() + "…"
+        logger.info("[GUARDRAILS] Final answer capped at %d chars", MAX_RAG_FINAL_ANSWER_CHARS)
     return final

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -11,26 +12,29 @@ from agents import Agent, ModelSettings, function_tool, set_default_openai_api
 from agents.mcp import MCPServerStdio
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from openai import AsyncOpenAI
+from rag.doc_chunk import rag_query_answer
 
 
 load_dotenv(override=True)
+
+logger = logging.getLogger(__name__)
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# OpenRouter and other OpenAI-compatible APIs work reliably with chat completions + tools.
 set_default_openai_api("chat_completions")
 
 
 def _make_openai_client() -> AsyncOpenAI:
-    key = os.getenv("OPENROUTER_API_KEY")
-    base = (
-        os.getenv("OPENROUTER_BASE_URL")
-        or "https://openrouter.ai/api/v1"
-    )
-    return AsyncOpenAI(api_key=key, base_url=base)
+    key = os.getenv("OPENAI_API_KEY")
+    logger.info("[AGENT] Initializing OpenAI client")
+    logger.debug("[AGENT] API key present: %s", bool(key))
+    return AsyncOpenAI(api_key=key)
 
 
 def _model_name() -> str:
-    return os.getenv("LEGAL_AGENT_MODEL", os.getenv("OPENAI_MODEL", "openai/gpt-4o-mini"))
+    name = os.getenv("LEGAL_AGENT_MODEL", "gpt-4.1-mini")
+    logger.info("[AGENT] Model: %s", name)
+    return name
 
 
 @function_tool
@@ -41,12 +45,12 @@ def query_nigerian_statutes_rag(user_question: str) -> str:
     when MCP keyword search is too narrow. Does not replace statute lookup tools
     for precise section numbers.
     """
-    from rag.doc_chunk import rag_query_answer
-
+    logger.info("[RAG] query_nigerian_statutes_rag invoked (question length=%d)", len(user_question))
     return rag_query_answer(user_question, None)
 
 
 def build_legal_mcp_server() -> MCPServerStdio:
+    logger.info("[MCP] Building MCPServerStdio (command=%s)", sys.executable)
     # Note: Use -m as args so project root is on sys.path (running mcp_server.py as a file breaks `from tools.*`).
     return MCPServerStdio(
         params={
@@ -61,11 +65,12 @@ def build_legal_mcp_server() -> MCPServerStdio:
 
 
 def create_legal_agent(mcp_servers: list) -> Agent:
+    logger.info("[AGENT] Creating LegalAdvisor agent with %d MCP servers", len(mcp_servers))
     client = _make_openai_client()
     model = OpenAIChatCompletionsModel(model=_model_name(), openai_client=client)
 
     instructions = """You are a Pan-African professional legal information assistant focused on Nigerian law,
-    tasked to answer question related to human right violation, criminal case, site examples, 
+    tasked to answer question related to human right violation, criminal case, site examples,
 provides constitutional act related to the user's question when the user's jurisdiction is Nigeria,
 and provides general guidance for other African jurisdictions.
 

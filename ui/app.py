@@ -1,9 +1,13 @@
+import logging
+
 import gradio as gr
 
 from legal_agents.runner import run_legal_agent_sync
 
-MAX_USER_MESSAGE_CHARS = 32_000
-_USER_MESSAGE_PREVIEW_CHARS = 400
+logger = logging.getLogger(__name__)
+
+# Guard rails: keep UI entry bounded and avoid leaking internal errors to users.
+MAX_USER_MESSAGE_CHARS = 400
 
 CUSTOM_CSS = """
 /* ── Layout ── */
@@ -252,7 +256,13 @@ def legal_aid_chat_interface():
             if not saved_text:
                 return chat_history
 
+            logger.info("[GUARDRAILS] User input received (length=%d chars)", len(saved_text))
             if len(saved_text) > MAX_USER_MESSAGE_CHARS:
+                logger.warning(
+                    "[GUARDRAILS] Message too long (%d chars > %d max)",
+                    len(saved_text),
+                    MAX_USER_MESSAGE_CHARS,
+                )
                 chat_history.append(
                     {
                         "role": "assistant",
@@ -270,11 +280,13 @@ def legal_aid_chat_interface():
             history_for_agent = chat_history[:-1]
 
             try:
+                logger.info("[AGENT] Calling run_legal_agent_sync")
                 bot_response = run_legal_agent_sync(saved_text, history_for_agent)
-            except Exception:
+            except Exception as exc:
+                logger.error("[AGENT] Agent call failed: %s", exc)
                 bot_response = (
                     "Something went wrong while processing your request. "
-                    "Check OPENROUTER_API_KEY / OPENAI_API_KEY, network access, and that "
+                    "Check OPENAI_API_KEY, network access, and that "
                     "dependencies are installed. If it keeps happening, try again later."
                 )
 
