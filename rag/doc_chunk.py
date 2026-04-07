@@ -133,16 +133,59 @@ Context:
 {context}"""
 
 
+# --- RAG path guard rails (bounds + safe fallbacks; doc_chunk only) ---
+MAX_RAG_QUESTION_CHARS = 32_000
+MAX_EXPAND_QUERY_INPUT_CHARS = 8_000
+MAX_EXPANDED_QUERY_CHARS = 1_200
+MAX_RAG_FINAL_ANSWER_CHARS = 24_000
+
+_EMPTY_QUESTION_REPLY = (
+    "Please ask a specific question about Nigerian law so I can search the knowledge base."
+)
+_NO_RETRIEVAL_CONTEXT_REPLY = (
+    "The documents I have access to do not cover this area of law."
+)
+_RAG_PROCESSING_ERROR_REPLY = (
+    "Something went wrong while searching the legal knowledge base. Please try again."
+)
+
+
+def _sanitize_rag_text(raw: str) -> str:
+    if not isinstance(raw, str):
+        return ""
+    return raw.replace("\x00", "").strip()
+
+
 def expand_query(question: str) -> str:
     """Use LLM to add legal terms to the query for better retrieval."""
+    q = _sanitize_rag_text(question)
+    if not q:
+        return ""
+    if len(q) > MAX_EXPAND_QUERY_INPUT_CHARS:
+        q = q[:MAX_EXPAND_QUERY_INPUT_CHARS]
+
     expansion_prompt = f"""Given this user question about Nigerian law, 
     rewrite it to include relevant legal terminology that would help 
-    find matching statutes. Keep it concise.
+    find matching statutes. Keep it concise. Output only the rewritten query, no labels or explanation.
     
-    Question: {question}
+    Question: {q}
     Rewritten query:"""
-    response = llm.invoke([HumanMessage(content=expansion_prompt)])
-    return response.content
+    try:
+        response = llm.invoke([HumanMessage(content=expansion_prompt)])
+        expanded = response.content
+    except Exception:
+        return q
+
+    if expanded is None:
+        return q
+    if not isinstance(expanded, str):
+        expanded = str(expanded)
+    expanded = _sanitize_rag_text(expanded)
+    if not expanded:
+        return q
+    if len(expanded) > MAX_EXPANDED_QUERY_CHARS:
+        expanded = expanded[:MAX_EXPANDED_QUERY_CHARS].rstrip()
+    return expanded or q
 
 
 llm_question = expand_query("I bought a phone in Nigeria that broke after 1 week. Shop won't refund. What are my rights?")
@@ -182,10 +225,28 @@ def rag_query_answer(
     question: str,
     chat_history: list[dict | BaseMessage] | None = None,
 ):
+    q = _sanitize_rag_text(question)
+    if not q:
+        return _EMPTY_QUESTION_REPLY
+    if len(q) > MAX_RAG_QUESTION_CHARS:
+        q = q[:MAX_RAG_QUESTION_CHARS]
+
     lc_history = _gradio_messages_to_lc_history(chat_history)
-    out = conversation_chain.invoke({"question": question, "chat_history": lc_history})
+    try:
+        out = conversation_chain.invoke({"question": q, "chat_history": lc_history})
+    except Exception:
+        return _RAG_PROCESSING_ERROR_REPLY
+
     source_docs = out.get("source_documents") or []
-    context = "\n\n".join(d.page_content for d in source_docs)
+    context_parts: list[str] = []
+    for d in source_docs:
+        page = getattr(d, "page_content", None)
+        if isinstance(page, str) and page.strip():
+            context_parts.append(page)
+    context = "\n\n".join(context_parts).strip()
+    if not context:
+        return _NO_RETRIEVAL_CONTEXT_REPLY
+
     draft = (out.get("answer") or "").strip()
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(context=context)
     if draft:
@@ -194,5 +255,21 @@ def rag_query_answer(
             "do not add facts beyond the Context):\n\n"
             f"{draft}"
         )
-    response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=question)])
-    return response.content
+    try:
+        response = llm.invoke(
+            [SystemMessage(content=system_prompt), HumanMessage(content=q)]
+        )
+    except Exception:
+        return draft if draft else _RAG_PROCESSING_ERROR_REPLY
+
+    final = response.content
+    if final is None:
+        return draft if draft else _NO_RETRIEVAL_CONTEXT_REPLY
+    if not isinstance(final, str):
+        final = str(final)
+    final = final.strip()
+    if not final:
+        return draft if draft else _NO_RETRIEVAL_CONTEXT_REPLY
+    if len(final) > MAX_RAG_FINAL_ANSWER_CHARS:
+        final = final[: MAX_RAG_FINAL_ANSWER_CHARS - 1].rstrip() + "…"
+    return final

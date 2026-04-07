@@ -1,7 +1,10 @@
 import gradio as gr
-from rag.doc_chunk import rag_query_answer
 
 from legal_agents.runner import run_legal_agent_sync
+
+# Guard rails: keep UI entry bounded and avoid leaking internal errors to users.
+MAX_USER_MESSAGE_CHARS = 32_000
+_USER_MESSAGE_PREVIEW_CHARS = 400
 
 LEGAL_KNOWLEDGE_BASE = {}
 
@@ -40,19 +43,39 @@ def legal_aid_chat_interface():
         )
 
         def respond(user_input, chat_history):
-            if not user_input.strip():
+            chat_history = chat_history or []
+            raw = user_input if isinstance(user_input, str) else ""
+            text = raw.replace("\x00", "").strip()
+            if not text:
+                return "", chat_history
+
+            if len(text) > MAX_USER_MESSAGE_CHARS:
+                preview = text[:_USER_MESSAGE_PREVIEW_CHARS]
+                if len(text) > _USER_MESSAGE_PREVIEW_CHARS:
+                    preview = preview + "…"
+                chat_history.append({"role": "user", "content": preview})
+                chat_history.append(
+                    {
+                        "role": "assistant",
+                        "content": (
+                            f"Your message is too long ({len(text):,} characters). "
+                            f"I can accept up to {MAX_USER_MESSAGE_CHARS:,} characters. "
+                            "Please shorten it or split it into smaller messages."
+                        ),
+                    },
+                )
                 return "", chat_history
 
             try:
-                bot_response = run_legal_agent_sync(user_input, chat_history)
-            except Exception as exc:
+                bot_response = run_legal_agent_sync(text, chat_history)
+            except Exception:
                 bot_response = (
-                    f"Something went wrong while running the legal agent: {exc}\n\n"
-                    "Check OPENAI_API_KEY, network, and that dependencies are installed."
+                    "Something went wrong while processing your request. "
+                    "Check OPENROUTER_API_KEY / OPENAI_API_KEY, network access, and that "
+                    "dependencies are installed. If it keeps happening, try again later."
                 )
 
-            chat_history = chat_history or []
-            chat_history.append({"role": "user", "content": user_input})
+            chat_history.append({"role": "user", "content": text})
             chat_history.append({"role": "assistant", "content": bot_response})
 
             return "", chat_history

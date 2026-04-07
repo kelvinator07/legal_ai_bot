@@ -20,3 +20,5 @@ faiss_index/
 
 .venv/
 
+**/chat_vector_db/
+rag/chat_vector_db/
