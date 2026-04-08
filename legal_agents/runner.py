@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from agents import Runner
 from agents.mcp import MCPServerManager
 
 from legal_agents.agent import build_legal_mcp_server, create_legal_agent
+
+logger = logging.getLogger(__name__)
 
 
 def _transcript_for_agent(
@@ -33,14 +36,21 @@ def _transcript_for_agent(
 async def run_legal_agent_async(user_message: str, gradio_history: list | None) -> str:
     payload = _transcript_for_agent(gradio_history, user_message)
     mcp = build_legal_mcp_server()
+    logger.info("[MCP] MCP server built, entering managed context")
     async with MCPServerManager([mcp], strict=False) as mgr:
+        logger.info("[MCP] MCP server connected, %d active servers", len(mgr.active_servers))
         agent = create_legal_agent(mgr.active_servers)
+        logger.info("[AGENT] Running agent pipeline (max_turns=25)")
         result = await Runner.run(agent, payload, max_turns=25)
         out = result.final_output
         if isinstance(out, str):
+            logger.info("[AGENT] Agent completed, output length=%d chars", len(out))
             return out
-        return str(out)
+        out_str = str(out)
+        logger.info("[AGENT] Agent completed, output length=%d chars", len(out_str))
+        return out_str
 
 
 def run_legal_agent_sync(user_message: str, gradio_history: list | None) -> str:
+    logger.info("[AGENT] Starting legal agent for user query (length=%d chars)", len(user_message))
     return asyncio.run(run_legal_agent_async(user_message, gradio_history))

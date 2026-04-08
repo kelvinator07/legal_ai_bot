@@ -9,6 +9,8 @@ Run manually for debugging:
 
 from __future__ import annotations
 
+import logging
+
 from mcp.server.fastmcp import FastMCP
 
 from tools.contract_analyzer import analyze_contract as _analyze_contract
@@ -18,18 +20,22 @@ from tools.jurisdiction_detector import detect_jurisdiction as _detect_jurisdict
 from tools.legal_search import search_legal_database as _search_legal_database
 from tools.web_cases_search import search_legal_cases_online as _search_legal_cases_online
 
+logger = logging.getLogger(__name__)
+
 mcp = FastMCP("legal-ai-bot")
 
 
 @mcp.tool(name="search_legal_database")
 def search_legal_database(topic: str, keyword: str = "", section: str = "") -> dict:
     """Search Nigerian statutes in the local knowledge base by topic and keyword or section."""
+    logger.info("[TOOLS] search_legal_database called (topic=%s, keyword=%s)", topic, keyword)
     return _search_legal_database(topic=topic, keyword=keyword, section=section)
 
 
 @mcp.tool(name="find_similar_cases")
 def find_similar_cases(description: str, topic: str = "", max_results: int = 5) -> dict:
     """Find relevant statutory provisions for the user's situation from the local knowledge base."""
+    logger.info("[TOOLS] find_similar_cases called (description length=%d)", len(description))
     return _find_similar_cases(
         description=description, topic=topic, max_results=max_results
     )
@@ -38,6 +44,7 @@ def find_similar_cases(description: str, topic: str = "", max_results: int = 5) 
 @mcp.tool(name="analyze_contract")
 def analyze_contract(contract_text: str, country: str = "Nigeria") -> dict:
     """Analyze contract text for risky clauses under Nigerian law."""
+    logger.info("[TOOLS] analyze_contract called (text length=%d, country=%s)", len(contract_text), country)
     return _analyze_contract(contract_text=contract_text, country=country)
 
 
@@ -50,6 +57,7 @@ def generate_complaint(
     topic: str = "",
 ) -> dict:
     """Generate a complaint email template and filing guide grounded in Nigerian law."""
+    logger.info("[TOOLS] generate_complaint called (type=%s, topic=%s)", complaint_type, topic)
     return _generate_complaint(
         complaint_type=complaint_type,
         user_name=user_name,
@@ -62,6 +70,7 @@ def generate_complaint(
 @mcp.tool(name="detect_jurisdiction")
 def detect_jurisdiction(user_message: str, stated_country: str = "") -> dict:
     """Detect country / jurisdiction from user message (Pan-African markers)."""
+    logger.info("[TOOLS] detect_jurisdiction called (message length=%d)", len(user_message))
     return _detect_jurisdiction(
         user_message=user_message, stated_country=stated_country
     )
@@ -70,6 +79,7 @@ def detect_jurisdiction(user_message: str, stated_country: str = "") -> dict:
 @mcp.tool(name="search_legal_cases_online")
 def search_legal_cases_online(query: str, max_results: int = 5) -> dict:
     """Search the web for court decisions, judgments, and legal commentary (verify sources)."""
+    logger.info("[TOOLS] search_legal_cases_online called (query=%s)", query)
     return _search_legal_cases_online(query=query, max_results=max_results)
 
 

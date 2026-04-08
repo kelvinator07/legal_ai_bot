@@ -21,14 +21,11 @@ Presentation example:
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
+import logging
 
-# ---------------------------------------------------------------------------
-# Knowledge base location and topic-to-file mapping
-# ---------------------------------------------------------------------------
+from tools.utils import KNOWLEDGE_BASE_DIR, load_knowledge_base_file
 
-KNOWLEDGE_BASE_DIR = Path(__file__).resolve().parent.parent / "rag" / "knowledge-base"
+logger = logging.getLogger(__name__)
 
 TOPIC_FILE_MAP: dict[str, list[dict[str, str]]] = {
     "labor": [
@@ -51,14 +48,6 @@ TOPIC_FILE_MAP: dict[str, list[dict[str, str]]] = {
 }
 
 ALL_TOPICS = set(TOPIC_FILE_MAP.keys())
-
-
-def _load_file(filename: str) -> str | None:
-    """Load a knowledge base file and return its text, or None if not found."""
-    filepath = KNOWLEDGE_BASE_DIR / filename
-    if not filepath.exists():
-        return None
-    return filepath.read_text(encoding="utf-8")
 
 
 def _search_sections(text: str, keyword: str, context_lines: int = 15) -> list[dict]:
@@ -134,7 +123,7 @@ def search_legal_database(topic: str, keyword: str = "", section: str = "") -> d
     all_results = []
 
     for source in TOPIC_FILE_MAP[topic_lower]:
-        text = _load_file(source["file"])
+        text = load_knowledge_base_file(source["file"])
         if text is None:
             continue
 

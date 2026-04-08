@@ -18,13 +18,11 @@ Presentation example:
 
 from __future__ import annotations
 
-from pathlib import Path
+import logging
 
-# ---------------------------------------------------------------------------
-# Knowledge base location
-# ---------------------------------------------------------------------------
+from tools.utils import load_knowledge_base_file
 
-KNOWLEDGE_BASE_DIR = Path(__file__).resolve().parent.parent / "rag" / "knowledge-base"
+logger = logging.getLogger(__name__)
 
 # Map common legal scenarios to relevant files and search terms
 SCENARIO_KEYWORDS: dict[str, list[dict]] = {
@@ -79,14 +77,6 @@ SCENARIO_KEYWORDS: dict[str, list[dict]] = {
         {"file": "Food And Drugs Act.md", "terms": ["food", "drug", "manufacture", "sale"]},
     ],
 }
-
-
-def _load_file(filename: str) -> str | None:
-    """Load a knowledge base file and return its text."""
-    filepath = KNOWLEDGE_BASE_DIR / filename
-    if not filepath.exists():
-        return None
-    return filepath.read_text(encoding="utf-8")
 
 
 def _find_relevant_sections(text: str, terms: list[str], max_sections: int = 3) -> list[dict]:
@@ -187,7 +177,7 @@ def find_similar_cases(
     # Search each file
     all_results = []
     for source in files_to_search:
-        text = _load_file(source["file"])
+        text = load_knowledge_base_file(source["file"])
         if text is None:
             continue
 
